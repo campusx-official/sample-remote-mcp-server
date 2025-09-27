@@ -5,10 +5,10 @@ import sqlite3
 import tempfile
 import json
 import aiosqlite
+import aiofiles
 import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-import anyio
 
 # Configure logging
 logger = get_logger(__name__)
@@ -32,9 +32,6 @@ DEFAULT_CATEGORIES_JSON = {
 
 mcp = FastMCP("ExpenseTracker")
 
-# Database connection semaphore for connection pooling
-_db_semaphore = asyncio.Semaphore(10)  # Max 10 concurrent connections
-
 async def get_db_connection() -> aiosqlite.Connection:
     """Get an async database connection with proper configuration."""
     conn = await aiosqlite.connect(DB_PATH, timeout=30.0)
@@ -48,8 +45,7 @@ async def init_db():
     try:
         logger.info(f"Initializing database at: {DB_PATH}")
         
-        async with _db_semaphore:
-            async with await get_db_connection() as conn:
+        async with await get_db_connection() as conn:
                 # Create expenses table
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS expenses(
@@ -69,7 +65,6 @@ async def init_db():
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)")
                 
                 # Test write access
-                await conn.execute("BEGIN IMMEDIATE")
                 await conn.execute("INSERT OR REPLACE INTO expenses(id, date, amount, category, note) VALUES (-1, '2000-01-01', 0, 'test', 'init test')")
                 await conn.execute("DELETE FROM expenses WHERE id = -1")
                 await conn.commit()
@@ -93,9 +88,8 @@ def validate_amount(amount: float) -> bool:
     return isinstance(amount, (int, float)) and amount >= 0
 
 # Use anyio to run the sync init in an async context
-async def async_init():
-    """Initialize the database asynchronously."""
-    await init_db()
+# Initialize database when module loads
+asyncio.create_task(init_db()) if asyncio.get_event_loop().is_running() else None
 
 @mcp.tool()
 async def add_expense(
@@ -130,8 +124,7 @@ async def add_expense(
         return {"status": "error", "message": "Category is required"}
     
     try:
-        async with _db_semaphore:
-            async with await get_db_connection() as conn:
+        async with await get_db_connection() as conn:
                 cur = await conn.execute(
                     """INSERT INTO expenses(date, amount, category, subcategory, note) 
                        VALUES (?, ?, ?, ?, ?)""",
@@ -193,20 +186,19 @@ async def list_expenses(
         return [{"error": "Invalid date format. Use YYYY-MM-DD"}]
     
     try:
-        async with _db_semaphore:
-            async with await get_db_connection() as conn:
-                async with conn.execute(
-                    """
-                    SELECT id, date, amount, category, subcategory, note, created_at
-                    FROM expenses
-                    WHERE date BETWEEN ? AND ?
-                    ORDER BY date DESC, id DESC
-                    """,
-                    (start_date, end_date)
-                ) as cur:
-                    rows = await cur.fetchall()
-                    cols = [description[0] for description in cur.description]
-                    results = [dict(zip(cols, row)) for row in rows]
+        async with await get_db_connection() as conn:
+            async with conn.execute(
+                """
+                SELECT id, date, amount, category, subcategory, note, created_at
+                FROM expenses
+                WHERE date BETWEEN ? AND ?
+                ORDER BY date DESC, id DESC
+                """,
+                (start_date, end_date)
+            ) as cur:
+                rows = await cur.fetchall()
+                cols = [description[0] for description in cur.description]
+                results = [dict(zip(cols, row)) for row in rows]
                 
                 logger.info(f"Listed {len(results)} expenses from {start_date} to {end_date}")
                 if ctx:
@@ -244,8 +236,7 @@ async def summarize(
         return [{"error": "Invalid date format. Use YYYY-MM-DD"}]
     
     try:
-        async with _db_semaphore:
-            async with await get_db_connection() as conn:
+        async with await get_db_connection() as conn:
                 query = """
                     SELECT 
                         category, 
@@ -263,12 +254,12 @@ async def summarize(
                     query += " AND category = ?"
                     params.append(category.strip())
 
-                query += " GROUP BY category ORDER BY total_amount DESC"
+            query += " GROUP BY category ORDER BY total_amount DESC"
 
-                async with conn.execute(query, params) as cur:
-                    rows = await cur.fetchall()
-                    cols = [description[0] for description in cur.description]
-                    results = [dict(zip(cols, row)) for row in rows]
+            async with conn.execute(query, params) as cur:
+                rows = await cur.fetchall()
+                cols = [description[0] for description in cur.description]
+                results = [dict(zip(cols, row)) for row in rows]
                 
                 # Round amounts for better display
                 for result in results:
@@ -309,26 +300,25 @@ async def get_expense_stats(
         return {"error": "Invalid date format. Use YYYY-MM-DD"}
     
     try:
-        async with _db_semaphore:
-            async with await get_db_connection() as conn:
-                async with conn.execute(
-                    """
-                    SELECT 
-                        COUNT(*) as total_expenses,
-                        SUM(amount) as total_amount,
-                        AVG(amount) as avg_amount,
-                        MIN(amount) as min_amount,
-                        MAX(amount) as max_amount,
-                        COUNT(DISTINCT category) as unique_categories,
-                        COUNT(DISTINCT date) as days_with_expenses
-                    FROM expenses
-                    WHERE date BETWEEN ? AND ?
-                    """,
-                    (start_date, end_date)
-                ) as cur:
-                    row = await cur.fetchone()
-                    cols = [description[0] for description in cur.description]
-                    result = dict(zip(cols, row))
+        async with await get_db_connection() as conn:
+            async with conn.execute(
+                """
+                SELECT 
+                    COUNT(*) as total_expenses,
+                    SUM(amount) as total_amount,
+                    AVG(amount) as avg_amount,
+                    MIN(amount) as min_amount,
+                    MAX(amount) as max_amount,
+                    COUNT(DISTINCT category) as unique_categories,
+                    COUNT(DISTINCT date) as days_with_expenses
+                FROM expenses
+                WHERE date BETWEEN ? AND ?
+                """,
+                (start_date, end_date)
+            ) as cur:
+                row = await cur.fetchone()
+                cols = [description[0] for description in cur.description]
+                result = dict(zip(cols, row))
                 
                 # Round amounts
                 for key in ['total_amount', 'avg_amount', 'min_amount', 'max_amount']:
@@ -363,18 +353,17 @@ async def delete_expense(expense_id: int, ctx: Context = None) -> Dict[str, Any]
         return {"status": "error", "message": "Invalid expense ID"}
     
     try:
-        async with _db_semaphore:
-            async with await get_db_connection() as conn:
-                # First check if expense exists
-                async with conn.execute("SELECT id, amount, category FROM expenses WHERE id = ?", (expense_id,)) as cur:
-                    expense = await cur.fetchone()
-                
-                if not expense:
-                    return {"status": "error", "message": f"Expense with ID {expense_id} not found"}
-                
-                # Delete the expense
-                await conn.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
-                await conn.commit()
+        async with await get_db_connection() as conn:
+            # First check if expense exists
+            async with conn.execute("SELECT id, amount, category FROM expenses WHERE id = ?", (expense_id,)) as cur:
+                expense = await cur.fetchone()
+            
+            if not expense:
+                return {"status": "error", "message": f"Expense with ID {expense_id} not found"}
+            
+            # Delete the expense
+            await conn.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+            await conn.commit()
                 
                 logger.info(f"Deleted expense: ID={expense_id}")
                 if ctx:
@@ -400,10 +389,12 @@ async def categories() -> str:
         categories_path = os.path.join(os.path.dirname(__file__), "categories.json")
         try:
             # Use anyio for async file reading
-            content = await anyio.Path(categories_path).read_text(encoding="utf-8")
-            # Validate it's proper JSON
-            json.loads(content)
-            return content
+            import aiofiles
+            async with aiofiles.open(categories_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+                # Validate it's proper JSON
+                json.loads(content)
+                return content
         except FileNotFoundError:
             logger.info("Categories file not found, using defaults")
         except json.JSONDecodeError:
@@ -420,9 +411,8 @@ async def categories() -> str:
 async def health_check() -> str:
     """Health check endpoint for monitoring."""
     try:
-        async with _db_semaphore:
-            async with await get_db_connection() as conn:
-                await conn.execute("SELECT 1")
+        async with await get_db_connection() as conn:
+            await conn.execute("SELECT 1")
                 return json.dumps({
                     "status": "healthy",
                     "database": "accessible",
@@ -439,7 +429,7 @@ async def health_check() -> str:
 async def main():
     """Main async function to start the server."""
     # Initialize database first
-    await async_init()
+    await init_db()
     
     # Set up proper configuration for remote deployment
     host = os.environ.get("HOST", "0.0.0.0")  # Listen on all interfaces
