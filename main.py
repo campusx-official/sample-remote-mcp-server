@@ -142,7 +142,7 @@ async def add_expense(
                 
                 logger.info(f"Added expense: ID={expense_id}, amount={amount}, category={category}")
                 if ctx:
-                    await ctx.log_info(f"Expense added: ${amount:.2f} for {category}")
+                    await ctx.info(f"Expense added: ${amount:.2f} for {category}")
                 
                 return {
                     "status": "success", 
@@ -154,7 +154,7 @@ async def add_expense(
         error_msg = f"Data validation error: {str(e)}"
         logger.error(error_msg)
         if ctx:
-            await ctx.log_error(error_msg)
+            await ctx.error(error_msg)
         return {"status": "error", "message": error_msg}
     except aiosqlite.OperationalError as e:
         if "readonly" in str(e).lower():
@@ -163,13 +163,13 @@ async def add_expense(
             error_msg = f"Database error: {str(e)}"
         logger.error(error_msg)
         if ctx:
-            await ctx.log_error(error_msg)
+            await ctx.error(error_msg)
         return {"status": "error", "message": error_msg}
     except Exception as e:
         error_msg = f"Unexpected error: {str(e)}"
         logger.error(error_msg)
         if ctx:
-            await ctx.log_error(error_msg)
+            await ctx.error(error_msg)
         return {"status": "error", "message": error_msg}
 
 @mcp.tool()
@@ -210,7 +210,7 @@ async def list_expenses(
                 
                 logger.info(f"Listed {len(results)} expenses from {start_date} to {end_date}")
                 if ctx:
-                    await ctx.log_info(f"Retrieved {len(results)} expenses")
+                    await ctx.info(f"Retrieved {len(results)} expenses")
                 
                 return results
                 
@@ -218,7 +218,7 @@ async def list_expenses(
         error_msg = f"Error listing expenses: {str(e)}"
         logger.error(error_msg)
         if ctx:
-            await ctx.log_error(error_msg)
+            await ctx.error(error_msg)
         return [{"error": error_msg}]
 
 @mcp.tool()
@@ -278,7 +278,7 @@ async def summarize(
                 
                 logger.info(f"Summarized expenses: {len(results)} categories from {start_date} to {end_date}")
                 if ctx:
-                    await ctx.log_info(f"Generated summary for {len(results)} categories")
+                    await ctx.info(f"Generated summary for {len(results)} categories")
                 
                 return results
                 
@@ -286,7 +286,7 @@ async def summarize(
         error_msg = f"Error summarizing expenses: {str(e)}"
         logger.error(error_msg)
         if ctx:
-            await ctx.log_error(error_msg)
+            await ctx.error(error_msg)
         return [{"error": error_msg}]
 
 @mcp.tool()
@@ -337,7 +337,7 @@ async def get_expense_stats(
                 
                 logger.info(f"Generated stats for {start_date} to {end_date}")
                 if ctx:
-                    await ctx.log_info(f"Generated statistics for date range")
+                    await ctx.info(f"Generated statistics for date range")
                 
                 return result
                 
@@ -345,7 +345,7 @@ async def get_expense_stats(
         error_msg = f"Error getting stats: {str(e)}"
         logger.error(error_msg)
         if ctx:
-            await ctx.log_error(error_msg)
+            await ctx.error(error_msg)
         return {"error": error_msg}
 
 @mcp.tool()
@@ -378,7 +378,7 @@ async def delete_expense(expense_id: int, ctx: Context = None) -> Dict[str, Any]
                 
                 logger.info(f"Deleted expense: ID={expense_id}")
                 if ctx:
-                    await ctx.log_info(f"Deleted expense ID {expense_id}")
+                    await ctx.info(f"Deleted expense ID {expense_id}")
                 
                 return {
                     "status": "success",
@@ -389,7 +389,7 @@ async def delete_expense(expense_id: int, ctx: Context = None) -> Dict[str, Any]
         error_msg = f"Error deleting expense: {str(e)}"
         logger.error(error_msg)
         if ctx:
-            await ctx.log_error(error_msg)
+            await ctx.error(error_msg)
         return {"status": "error", "message": error_msg}
 
 @mcp.resource("expense://categories", mime_type="application/json")
